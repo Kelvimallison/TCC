@@ -1,7 +1,4 @@
-
-# # Previsão de Vendas de Smartphones 
-
-# Importando blibliotecas do projeto 
+# importando bibliotecas que serao utilizadas 
 
 import re
 import pickle
@@ -10,6 +7,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+from rapidfuzz import process
 
 from sklearn.model_selection import TimeSeriesSplit, GridSearchCV, cross_val_score
 from sklearn.linear_model import LinearRegression, LogisticRegression
@@ -21,20 +19,23 @@ from sklearn.metrics import (
 )
 from xgboost import XGBRegressor, XGBClassifier
 
-BASE = r"C:\Users\kelvim\OneDrive\Desktop\planilhas atualizadas tcc" 
+ENTRADA = r"C:\Users\kelvim\OneDrive\Desktop\planilhas atualizadas tcc"
+BASE = r"C:\Users\kelvim\OneDrive\Desktop\planilhas atualizadas tcc\github final"  
+
+
 
 
 #Carregando o dataset para o python e consolidando planilhas 
 
 # Arquivos reais: 2022="terminais", 2023="terminais 2023",
-# 2024="DADOS TERMINAIS 2024", 2025="TERMINAIS " .
+# 2024="DADOS TERMINAIS 2024", 2025="TERMINAIS ".
 
 
 sheets = {
-    2022: (f"{BASE}\\2022.xlsx", "terminais"),
-    2023: (f"{BASE}\\2023.xlsx", "terminais 2023"),
-    2024: (f"{BASE}\\2024.xlsx", "DADOS TERMINAIS 2024"),
-    2025: (f"{BASE}\\2025.xlsx", "TERMINAIS "),
+    2022: (f"{ENTRADA}\\2022.xlsx", "terminais"),
+    2023: (f"{ENTRADA}\\2023.xlsx", "terminais 2023"),
+    2024: (f"{ENTRADA}\\2024.xlsx", "DADOS TERMINAIS 2024"),
+    2025: (f"{ENTRADA}\\2025.xlsx", "TERMINAIS "),
 }
 
 #  Dados pessoais de clientes, devo remover (LGPD)
@@ -42,7 +43,6 @@ colunas_pii = ["Nome Cliente", "CPF/CNPJ", "Endereço", "E-mail", "Chave de Aces
                "Nº de Acesso", "Nº Comprovante Fiscal"]
 
 # Unificando nomes de colunas, para nao ter problema com duplicatas depois 
-
 mapa_colunas = {
     "Categoria Tipo": "CATEGORIA", "CATEGORIA": "CATEGORIA",
     "Subcategoria": "SUBCATEGORIA_GERENCIAL", "SUBCATEGORIA_GERENCIAL": "SUBCATEGORIA_GERENCIAL",
@@ -69,11 +69,10 @@ for ano, (caminho, aba) in sheets.items():
 df = pd.concat(dfs, ignore_index=True)
 print("\nTotal consolidado:", df.shape)
 
-#2. Limpeza dos dados
-
-# Padronizar nomes de colunas
+# ## 2. Limpeza dos dados
 
 
+# 2.1 Padronizar nomes de colunas
 df.columns = (
     df.columns.str.strip()
     .str.normalize("NFKD")
@@ -84,8 +83,8 @@ df.columns = (
 )
 print(df.columns.tolist())
 
-# Conversão de tipos
 
+# 2.2 Conversão de tipos ajustando formato dos dados 
 
 df["DATA_DA_VENDA"] = pd.to_datetime(df["DATA_DA_VENDA"], errors="coerce")
 df["DATA_DE_EMISSAO_DA_NOTA"] = pd.to_datetime(df["DATA_DE_EMISSAO_DA_NOTA"], errors="coerce")
@@ -100,10 +99,9 @@ for col in colunas_numericas:
                    .str.replace(",", ".", regex=False))
     df[col] = pd.to_numeric(df[col], errors="coerce")
 
-#  Remover nulos e inválidos e duplicatas 
-## Tem alguns valores nulos, por serem uma quantidade pequena, irei descartar os valores
 
-
+# 2.3 Remover nulos e inválidos (documentar linhas removidas em cada etapa para o TCC)
+#Tem alguns valores nulos, por serem uma quantidade pequena, irei descartar os valores
 n_antes = len(df)
 
 df = df.dropna(subset=["DATA_DA_VENDA", "VALOR_DE_VENDA", "QTDE."])
@@ -111,6 +109,7 @@ print(f"Removidas por nulo em data/valor/qtde: {n_antes - len(df)}")
 
 print("\nDistribuição de STATUS antes do filtro de qtde/valor:")
 print(df["STATUS"].value_counts())
+
 
 n_antes = len(df)
 df = df[df["QTDE."] > 0]
@@ -125,14 +124,12 @@ print("\nNulos restantes por coluna:")
 print(df.isnull().sum().sort_values(ascending=False))
 print("\nLinhas após limpeza básica:", len(df))
 
-# Cor não deve entrar em nenhuma etapa da modelagem, ira atrapalhar remover  a coluna
 
-
+# 2.4 Cor não entra em nenhuma etapa da modelagem retirar a coluna  vai atrapalhar se continuar 
 df = df.drop(columns=["COR"], errors="ignore")
 
 
-
-# #  3. Apos limpeza comecar a tratar os dados, sera utilizado somente smartphones, invalidar demais dados 
+ #  3. Apos limpeza comecar a tratar os dados, sera utilizado somente smartphones, invalidar demais dados 
 
 #  Isolar smartphones (a base "terminais" também traz Box/Modem/FWT/Bem-Estar)
 
@@ -151,7 +148,6 @@ print("Modelos únicos:", df["MODELO_COMERCIAL"].nunique())
 #fazer isso porque atualmente a empresa trabalha  apenas com as tres
 # demais marcas não entram na base de treino/previsão pois foram descontinuadas .
 
-
 df["MARCA"] = df["MARCA"].astype(str).str.upper().str.strip()
 df["MARCA_ATIVA"] = df["MARCA"].isin(["APPLE", "SAMSUNG", "MOTOROLA"])
 
@@ -159,15 +155,14 @@ print("Distribuição de marcas (histórico completo):")
 print(df["MARCA"].value_counts())
 print(f"\nLinhas com marca ativa (Apple/Samsung/Motorola): {df['MARCA_ATIVA'].sum()} de {len(df)}")
 
-df_hist = df.copy()         
-df = df[df["MARCA_ATIVA"]].copy()   
+df_hist = df.copy()          # mantém tudo para análise exploratória/contexto histórico
+df = df[df["MARCA_ATIVA"]].copy()   #  só marcas ativas
 print("Linhas após restringir a Apple/Samsung/Motorola:", len(df))
 
 # 4. Tabela de datas de lançamento 
 # adicionar tabela com datas de lnaçamento para validar ciclo de vida 
 # # Lista com uma linha por modelo, montada a partir dos comunicados oficiais de
 # lançamento da Apple, Samsung e Motorola .
-
 
 
 dados_lancamento = pd.DataFrame([
@@ -359,12 +354,17 @@ dados_lancamento_final = dados_lancamento[["Marca", "Modelo", "DATA_LANCAMENTO"]
 dados_lancamento_final.to_excel(f"{BASE}\\datas_lancamento_exploded.xlsx", index=False)
 print(f"{len(dados_lancamento_final)} modelos na tabela de lançamento curada")
 
+
+
+
 # 5. Fuzzy matching entre nome de venda e tabela de lançamento
 # remover marca ,armazenamento, cor, 4G/5G e códigos entre parênteses não atrapalhar a comparação 
 
 
+
+
 def canon(nome):
-    
+    """Nome do aparelho sem marca, armazenamento, cor, 4G/5G e códigos entre parênteses."""
     n = str(nome).upper()
     n = re.sub(r"\([^)]*\)", " ", n)
     n = re.sub(r"\d+\s*(GB|TB)\b", " ", n)
@@ -373,10 +373,10 @@ def canon(nome):
     n = re.sub(r"\b[45]G\b", " ", n)
     n = re.sub(r"[^A-Z0-9+ ]", " ", n)
     n = re.sub(r"\s+", " ", n).strip()
-    n = re.sub(r"^IPHONE (\d+) MAX$", r"IPHONE \1 PRO MAX", n)   
+    n = re.sub(r"^IPHONE (\d+) MAX$", r"IPHONE \1 PRO MAX", n)   # a tabela usa "iPhone 12 Max" para o Pro Max
     return ALIAS.get(n, n)
 
-# nomes diferentes que estava esquecendo de validar 
+# nomes diferentes que estava esquecendo de validar
 ALIAS = {"GALAXY S21 PLUS": "GALAXY S21+", "GALAXY S20+ BTS": "GALAXY S20+", "GALAXY A176B": "GALAXY A17"}
 
 def canon_lancamento(nome):
@@ -416,9 +416,8 @@ pct_aprox = df["LANCAMENTO_APROXIMADO"].mean() * 100
 print(f"Registros usando fallback por primeira venda: {pct_aprox:.1f}%")
 print(f"Modelos usando fallback: {df.loc[df['LANCAMENTO_APROXIMADO'], 'MODELO_COMERCIAL'].nunique()}")
 
-# # Junta as variações de cor e armazenamento de um mesmo celular em um nome só 
+# 4.1 Juntar as variações de cor e armazenamento de um mesmo celular em um nome só 
 #  para que as vendas de cada aparelho não fiquem divididas.
-
 n_bruto = df["MODELO_COMERCIAL"].nunique()
 df["MODELO_COMERCIAL_ORIGINAL"] = df["MODELO_COMERCIAL"]
 df["MODELO_COMERCIAL"] = df["Modelo_Lancamento_Sugerido"].fillna(df["CANON"].str.title())
@@ -426,7 +425,7 @@ n_canonico = df["MODELO_COMERCIAL"].nunique()
 print(f"Modelos únicos: {n_bruto} (string bruta) -> {n_canonico} (nome canônico consolidado)")
 
 
-# atribuindo valores ao ciclo de vida 
+#6.  atribuindo valores ao ciclo de vida 
 
 
 df["ANO"] = df["DATA_DA_VENDA"].dt.year
@@ -443,17 +442,17 @@ df["FASE_CICLO"] = pd.cut(
 print(df["FASE_CICLO"].value_counts())
 
 
-
+# Distribuição da fase de ciclo de vida nas vendas.
 fase_counts = df["FASE_CICLO"].value_counts()
 
 plt.figure(figsize=(5, 5))
 plt.pie(fase_counts.values, labels=fase_counts.index, autopct="%1.1f%%", startangle=90)
-plt.title("Distribuição das vendas por fase do ciclo de vida")
 plt.tight_layout()
 plt.savefig(f"{BASE}\\distribuicao_fase_ciclo.png", dpi=300, bbox_inches="tight")
 plt.show()
 
-# base mensal agregada para previsão, regressão linear 
+
+# ## 7. Base mensal agregada para previsão (regressão)
 
 
 base_mensal = (
@@ -475,6 +474,7 @@ for lag in [1, 2, 3]:
 
 # Adicionando as datas  comemorativas o mês
 
+
 base_mensal["MES"] = base_mensal["DATA_DA_VENDA"].dt.month
 base_mensal["IS_BLACK_FRIDAY"] = (base_mensal["MES"] == 11).astype(int)   # Novembro
 base_mensal["IS_NATAL"] = (base_mensal["MES"] == 12).astype(int)          # Dezembro
@@ -482,6 +482,8 @@ base_mensal["IS_DIA_DAS_MAES"] = (base_mensal["MES"] == 5).astype(int)    # Maio
 base_mensal["IS_DIA_DOS_PAIS"] = (base_mensal["MES"] == 8).astype(int)    # Agosto
 
 # Fase do ciclo de vida na base mensal, para modelos de regressão e de classificação.
+
+
 base_mensal["FASE_CICLO"] = pd.cut(
     base_mensal["DIAS_DESDE_LANCAMENTO"],
     bins=[-1, 90, 270, 365, np.inf],
@@ -492,8 +494,6 @@ base_mensal = pd.concat([base_mensal, fase_dummies], axis=1)
 
 base_mensal = base_mensal.dropna()
 print("Base mensal agregada:", base_mensal.shape)
-
-
 
 base_mensal = base_mensal.sort_values("DATA_DA_VENDA")
 corte = base_mensal["DATA_DA_VENDA"].quantile(0.8)
@@ -509,7 +509,8 @@ X_teste = teste[features].astype("float64")
 y_treino, y_teste = treino["QTDE_VENDIDA"], teste["QTDE_VENDIDA"]
 print(f"Treino: {len(treino)} linhas até {corte.date()} | Teste: {len(teste)} linhas depois disso")
 
-#   Modelos de regressão (volume de vendas)
+
+#  8. Modelos de regressão (volume de vendas)
 
 
 def smape(y_teste, y_pred):
@@ -542,17 +543,30 @@ for nome, modelo in modelos.items():
 resultados_reg = pd.concat(resultados_reg)
 print(resultados_reg)
 
-# Validação cruzada apropriada para série temporal
 
+# ## 9. Validação cruzada apropriada para série temporal
+
+
+#  período de treino 
+# em 5 dobras temporais (TimeSeriesSplit) e o conjunto de teste fica guardado para ser
+# usado uma única vez, depois da escolha.
 
 tscv = TimeSeriesSplit(n_splits=5)
-scores = cross_val_score(
-    XGBRegressor(n_estimators=300, random_state=42),
-    X_treino, y_treino, cv=tscv, scoring="neg_mean_absolute_error"
-)
-print("MAE médio (TimeSeriesSplit, 5 folds):", -scores.mean())
+mae_validacao = {}
+for nome, modelo in modelos.items():
+    scores = cross_val_score(modelo, X_treino, y_treino, cv=tscv, scoring="neg_mean_absolute_error")
+    mae_validacao[nome] = -scores.mean()
+    print(f"MAE médio na validação cruzada (5 dobras) - {nome}: {-scores.mean():.2f}")
 
-# Ajuste  do XGBoost (GridSearchCV + TimeSeriesSplit)
+# Modelo de referência ingênuo: a venda do mês é igual à venda do mês anterior (QTDE_LAG_1)
+
+mae_ingenuo_dobras = [mean_absolute_error(y_treino.iloc[idx_val], X_treino["QTDE_LAG_1"].iloc[idx_val])
+                      for _, idx_val in tscv.split(X_treino)]
+mae_validacao["Ingenuo (mes anterior)"] = np.mean(mae_ingenuo_dobras)
+print(f"MAE médio na validação cruzada (5 dobras) - Ingenuo (mes anterior): {np.mean(mae_ingenuo_dobras):.2f}")
+
+
+# ## 9.1 Ajuste fino do XGBoost (GridSearchCV + TimeSeriesSplit)
 #
 # O XGBoost "de fábrica" (seção 8) ficou atrás do Random Forest. Antes de descartar,
 # testar várias combinações de hiperparâmetros para ver se ele melhora com ajuste fino.
@@ -583,8 +597,10 @@ resultado_xgb_ajustado = avaliar_regressao("XGBoost (ajustado)", y_teste, pred_a
 print("\nComparação no conjunto de teste:")
 print(pd.concat([resultados_reg, resultado_xgb_ajustado]))
 
-# Seleção  do melhor modelo
-#
+
+#  9.2 Seleção automática do melhor modelo
+
+
 # Escolher o modelo com menor MAE no conjunto de teste entre os quatro candidatos
 # (Regressão Linear, Random Forest, XGBoost e XGBoost ajustado). Esse modelo é o usado
 # no gráfico de importância das variáveis, nas previsões exportadas e no arquivo `.pkl`.
@@ -596,13 +612,27 @@ candidatos = {
     "XGBoost": modelos["XGBoost"],
     "XGBoost (ajustado)": xgb_ajustado,
 }
-comparacao_final = pd.concat([resultados_reg, resultado_xgb_ajustado])
-nome_melhor_modelo = comparacao_final["MAE"].idxmin()
+mae_validacao["XGBoost (ajustado)"] = -gs_xgb.best_score_
+
+# Modelos de referência no teste: ingênuo (mês anterior) e sazonal (mesmo mês do ano anterior)
+resultado_ingenuo = avaliar_regressao("Ingenuo (mes anterior)", y_teste, teste["QTDE_LAG_1"])
+venda_mensal = df.groupby(["MODELO_COMERCIAL", pd.Grouper(key="DATA_DA_VENDA", freq="ME")])["QTDE."].sum()
+chaves_ano_anterior = [(m, d - pd.DateOffset(years=1) + pd.offsets.MonthEnd(0))
+                       for m, d in zip(teste["MODELO_COMERCIAL"], teste["DATA_DA_VENDA"])]
+pred_sazonal = pd.Series([venda_mensal.get(k, np.nan) for k in chaves_ano_anterior], index=teste.index)
+tem_ano_anterior = pred_sazonal.notna()
+print(f"Casos do teste com venda no mesmo mês do ano anterior: {tem_ano_anterior.sum()} de {len(teste)}")
+print(avaliar_regressao("Sazonal (mesmo mes do ano anterior)", y_teste[tem_ano_anterior], pred_sazonal[tem_ano_anterior]))
+
+comparacao_final = pd.concat([resultados_reg, resultado_xgb_ajustado, resultado_ingenuo])
+comparacao_final.insert(0, "MAE_validacao", pd.Series(mae_validacao))
+nome_melhor_modelo = comparacao_final.drop(index="Ingenuo (mes anterior)")["MAE_validacao"].idxmin()
 melhor_modelo = candidatos[nome_melhor_modelo]
-print(f"Melhor modelo (menor MAE no teste): {nome_melhor_modelo}")
+print(f"Melhor modelo (menor MAE na validação cruzada): {nome_melhor_modelo}")
 print(comparacao_final)
 
-# Modelo  de classificação fim de ciclo de vida
+
+# ## 10. Modelo complementar de classificação (fim de ciclo de vida)
 
 
 base_mensal["MEDIA_3M"] = base_mensal[["QTDE_LAG_1", "QTDE_LAG_2", "QTDE_LAG_3"]].mean(axis=1)
@@ -611,12 +641,14 @@ base_mensal["DECLINIO"] = (base_mensal["QTDE_VENDIDA"] < base_mensal["MEDIA_3M"]
 print("Proporção de declínio:")
 print(base_mensal["DECLINIO"].value_counts(normalize=True))
 
-# 
+
+
+# justifica class_weight="balanced"/scale_pos_weight usados nos classificadores abaixo.
+
 declinio_counts = base_mensal["DECLINIO"].value_counts().rename({0: "Sem declínio", 1: "Declínio"})
 
 plt.figure(figsize=(5, 5))
 plt.pie(declinio_counts.values, labels=declinio_counts.index, autopct="%1.1f%%", startangle=90)
-plt.title("Distribuição da variável DECLINIO")
 plt.tight_layout()
 plt.savefig(f"{BASE}\\distribuicao_declinio.png", dpi=300, bbox_inches="tight")
 plt.show()
@@ -638,8 +670,7 @@ classificadores = {
                               n_estimators=300, random_state=42, eval_metric="logloss"),
 }
 
-
-# precisão, revocação, F1 e Kappa, além da matriz de confusão.
+#  precisão, revocação, F1 e Kappa, além da matriz de confusão.
 
 
 def avaliar_classificacao(nome_modelo, y_teste, y_pred):
@@ -658,6 +689,15 @@ def avaliar_classificacao(nome_modelo, y_teste, y_pred):
     )
     return resultados, matriz_confusao
 
+# Escolha do classificador pelo F1 médio na validação cruzada 
+f1_validacao = {}
+for nome, clf in classificadores.items():
+    scores = cross_val_score(clf, X_treino_c, y_treino_c, cv=tscv, scoring="f1")
+    f1_validacao[nome] = scores.mean()
+    print(f"F1 médio na validação cruzada (5 dobras) - {nome}: {scores.mean():.3f}")
+nome_melhor_clf = max(f1_validacao, key=f1_validacao.get)
+print(f"Classificador escolhido (maior F1 na validação cruzada): {nome_melhor_clf}")
+
 resultados_clf = []
 for nome, clf in classificadores.items():
     clf.fit(X_treino_c, y_treino_c)
@@ -667,17 +707,20 @@ for nome, clf in classificadores.items():
     print(f"\n--- {nome} ---")
     print(matriz_confusao)
 
-resultados_clf = pd.concat(resultados_clf).sort_values("F1", ascending=False)
+resultados_clf = pd.concat(resultados_clf)
+resultados_clf.insert(0, "F1_validacao", pd.Series(f1_validacao).round(3))
+resultados_clf = resultados_clf.sort_values("F1_validacao", ascending=False)
 print("\nComparação dos modelos de classificação (fim de ciclo):")
 print(resultados_clf)
 
-# Importância de atributos (melhor modelo)
+
+# ## 11. Importância de atributos (melhor modelo)
 
 
 if hasattr(melhor_modelo, "feature_importances_"):
     valores_importancia = melhor_modelo.feature_importances_
 else:
-   
+    
     valores_importancia = np.abs(melhor_modelo.coef_)
 
 importancias = pd.DataFrame({
@@ -689,12 +732,12 @@ plt.figure(figsize=(7, 6))
 sns.barplot(data=importancias, x="importance", y="feature", palette="magma")
 plt.xlabel("Importância")
 plt.ylabel("Variável")
-plt.title(f"Importância dos atributos — {nome_melhor_modelo}")
 plt.tight_layout()
 plt.savefig(f"{BASE}\\importancia_variaveis.png", dpi=300, bbox_inches="tight")
 plt.show()
 
-#  Salvar modelo e exportar previsões
+
+#  12. Salvar modelo e exportar previsões
 
 
 with open(f"{BASE}\\modelo_previsao_vendas.pkl", "wb") as f:
@@ -709,8 +752,9 @@ print(f"Modelo salvo em modelo_previsao_vendas.pkl ({nome_melhor_modelo})")
 print("Previsões exportadas para previsoes_vendas.csv")
 
 
-# Previsto x real  vai mostrar
-#  o mais perto o melhor modelo chega da diagonal ideal (previsão = real) no teste. 
+# Previsto x real — equivalente visual à curva ROC do modelo de classificação: mostra
+# o quão perto o melhor modelo chega da diagonal ideal (previsão = real) no teste.
+
 limite = max(df_previsoes["QTDE_REAL"].max(), df_previsoes["QTDE_PREVISTA"].max())
 
 plt.figure(figsize=(6, 6))
@@ -718,15 +762,16 @@ plt.scatter(df_previsoes["QTDE_REAL"], df_previsoes["QTDE_PREVISTA"], alpha=0.4,
 plt.plot([0, limite], [0, limite], "--", color="gray", label="Previsão = Real")
 plt.xlabel("Quantidade real")
 plt.ylabel("Quantidade prevista")
-plt.title(f"Previsto x Real — {nome_melhor_modelo}")
 plt.legend()
 plt.tight_layout()
 plt.savefig(f"{BASE}\\previsto_vs_real.png", dpi=300, bbox_inches="tight")
 plt.show()
 
-# Comparação da FASE_CICLO com o ciclo de vida usado pela empresa (ESTOQUE.xlsx)
 
-estoque = pd.read_excel(f"{BASE}\\ESTOQUE.xlsx", sheet_name="ESTOQUE TERMINAIS")
+# ## 13. Comparação da FASE_CICLO com o ciclo de vida real da empresa (ESTOQUE.xlsx)
+
+
+estoque = pd.read_excel(f"{ENTRADA}\\ESTOQUE.xlsx", sheet_name="ESTOQUE TERMINAIS")
 
 
 canon_para_modelo = df.drop_duplicates("CANON").set_index("CANON")["MODELO_COMERCIAL"]
@@ -746,6 +791,7 @@ ciclo_vida_real = (
     .rename("CICLO_VIDA_REAL")
 )
 
+# Fase calculada na venda mais recente de cada modelo (mais próxima do snapshot do estoque)
 venda_mais_recente = df.sort_values("DATA_DA_VENDA").groupby("MODELO_COMERCIAL").tail(1)
 fase_calculada = venda_mais_recente.set_index("MODELO_COMERCIAL")["FASE_CICLO"]
 
@@ -759,7 +805,6 @@ plt.figure(figsize=(7, 5))
 sns.heatmap(tabela_cruzada, annot=True, fmt="d", cmap="magma")
 plt.xlabel("CICLO_VIDA real (ESTOQUE.xlsx)")
 plt.ylabel("FASE_CICLO calculada (pipeline)")
-plt.title("FASE_CICLO calculada x CICLO_VIDA real da empresa")
 plt.tight_layout()
 plt.savefig(f"{BASE}\\fase_ciclo_vs_estoque.png", dpi=300, bbox_inches="tight")
 plt.show()
